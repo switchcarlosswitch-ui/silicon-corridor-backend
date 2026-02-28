@@ -1,26 +1,55 @@
-const express = require('express');
-const cors = require('cors');
-const axios = require('axios');
+const express    = require('express');
+const cors       = require('cors');
+const axios      = require('axios');
 require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
+const rateLimit  = require('express-rate-limit');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 // ── Environment variables ──────────────────────────────────
-const BREVO_KEY              = process.env.BREVO_API_KEY;
-const SUPABASE_URL           = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const PORT                   = process.env.PORT || 3000;
-const SENDER_EMAIL           = 'noreply@siliconcorridorventures.com';
-const SENDER_NAME            = 'Silicon Corridor Ventures';
+const BREVO_KEY            = process.env.BREVO_API_KEY;
+const SUPABASE_URL         = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const PORT                 = process.env.PORT || 3000;
+const SENDER_EMAIL         = 'noreply@siliconcorridorventures.com';
+const SENDER_NAME          = 'Silicon Corridor Ventures';
 
 // ── Supabase ADMIN client (service role — bypasses RLS) ───
-// This key never leaves the server. It is NOT the anon key.
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-// ── Health check (Railway uses this to confirm service is up)
+// ── Rate Limiters ─────────────────────────────────────────
+
+// 20 invitations per hour
+const inviteLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many invitation requests. Please try again in an hour.' }
+});
+
+// 5 reset emails per 15 minutes
+const resetEmailLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many reset requests. Please try again in 15 minutes.' }
+});
+
+// 5 reset attempts per 15 minutes
+const resetPasswordLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many reset attempts. Please try again in 15 minutes.' }
+});
+
+// ── Health check ──────────────────────────────────────────
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', service: 'Silicon Corridor Ventures Backend' });
 });
@@ -29,7 +58,7 @@ app.get('/health', (req, res) => {
 // POST /api/send-invitation
 // Sends a branded investor invitation email via Brevo
 // ============================================================
-app.post('/api/send-invitation', async (req, res) => {
+app.post('/api/send-invitation', inviteLimiter, async (req, res) => {
     const { name, email, token, expiry, inviteUrl } = req.body;
 
     if (!name || !email || !token) {
@@ -76,9 +105,8 @@ app.post('/api/send-invitation', async (req, res) => {
 // ============================================================
 // POST /api/send-password-reset
 // Sends a branded password reset email via Brevo
-// Called by the frontend after storing the token in Supabase
 // ============================================================
-app.post('/api/send-password-reset', async (req, res) => {
+app.post('/api/send-password-reset', resetEmailLimiter, async (req, res) => {
     const { name, email, token, resetUrl } = req.body;
 
     if (!name || !email || !token || !resetUrl) {
@@ -128,13 +156,9 @@ app.post('/api/send-password-reset', async (req, res) => {
 
 // ============================================================
 // POST /api/reset-password
-// 1. Validates the reset token from the password_resets table
-// 2. Finds the user by email in the profiles table
-// 3. Updates the password via Supabase Admin API
-// 4. Marks the token as used so it cannot be reused
-// The service role key never touches the browser — server only
+// Validates token and updates password via Supabase Admin API
 // ============================================================
-app.post('/api/reset-password', async (req, res) => {
+app.post('/api/reset-password', resetPasswordLimiter, async (req, res) => {
     const { token, email, newPassword } = req.body;
 
     if (!token || !email || !newPassword) {
