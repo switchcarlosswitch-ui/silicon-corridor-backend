@@ -6,7 +6,14 @@ const { createClient } = require('@supabase/supabase-js');
 const rateLimit  = require('express-rate-limit');
 
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin: [
+        'https://portal.siliconcorridorventures.com',
+        'https://https://switchcarlosswitch-ui.github.io',
+        'http://localhost:3000'
+    ],
+    credentials: true
+}));
 app.use(express.json());
 
 // ── Environment variables ──────────────────────────────────
@@ -230,3 +237,4 @@ app.post('/api/reset-password', resetPasswordLimiter, async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Silicon Corridor Backend running on port ${PORT}`);
 });
+
